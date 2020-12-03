@@ -1,6 +1,148 @@
 from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton
-import sys
 from PyQt5 import QtCore, QtGui, QtWidgets
+import random
+from time import time
+import copy
+
+
+def get_variants(sudoku):
+    variants = []
+    size = int(len(sudoku) ** 0.5)
+    for i, row in enumerate(sudoku):
+        for j, value in enumerate(row):
+            if not value:
+                row_values = set(row)
+                col_values = set([sudoku[k][j] for k in range(size ** 2)])
+                sq_y, sq_x = i // size, j // size
+                square_values = set([sudoku[m][n]
+                                     for m in range(sq_y * size, sq_y * size + size)
+                                     for n in range(sq_x * size, sq_x * size + size)])
+                exists = row_values | col_values | square_values
+                values = set(range(1, size ** 2 + 1)) - exists
+                variants.append((i, j, values))
+    return variants
+
+
+def solve_sudoku(sudoku):
+    if all([all(row) for row in sudoku]):
+        return sudoku
+    variants = get_variants(sudoku)
+    x, y, values = min(variants, key=lambda x: len(x[2]))
+    for v in values:
+        new_sudoku = copy.deepcopy(sudoku)
+        new_sudoku[x][y] = v
+        s = solve_sudoku(new_sudoku)
+        if s:
+            return s
+
+
+class Sudoku:
+    """Класс судоку матрицы"""
+
+    def __init__(self, size=3):
+        self.size = size
+        self.matrix = []
+        self.generate_initial_matrix()
+
+    def show(self):
+        """Выводит судоку в консоль"""
+        for row in range(self.size ** 2):
+            for col in range(self.size ** 2):
+                if self.matrix[row][col] != 0:
+                    print(f'{self.matrix[row][col]:3d}', end='')
+                else:
+                    print('   ', end='')
+            print()
+        print()
+
+    def transpose(self):
+        """Транспонирует матрицу"""
+        self.matrix = list(map(list, zip(*self.matrix)))
+
+    def change_rows(self):
+        start = random.choice(range(self.size))
+        variants = list(range(start * self.size, start * self.size + self.size))
+        random.shuffle(variants)
+        first = variants.pop()
+        second = variants.pop()
+        self.matrix[first], self.matrix[second] = self.matrix[second], self.matrix[first]
+
+    def change_cols(self):
+        self.transpose()
+        self.change_rows()
+        self.transpose()
+
+    def change_row_districts(self):
+        """Обменивает два случайных района по горизонтали"""
+        variants = list(range(self.size))
+        first = random.choice(variants)
+        variants.remove(first)
+        second = random.choice(variants)
+
+        for i in range(self.size):
+            self.matrix[first * self.size + i], \
+            self.matrix[second * self.size + i] = self.matrix[second * self.size + i], \
+                                                  self.matrix[first * self.size + i]
+
+    def change_col_districts(self):
+        """Обменивает два случайных района по вертикали"""
+        self.transpose()
+        self.change_row_districts()
+        self.transpose()
+
+    def random_mix_matrix(self, k=5):
+        w = [self.transpose,
+             self.change_rows,
+             self.change_cols,
+             self.change_row_districts,
+             self.change_col_districts]
+        for _ in range(k):
+            mix_function = random.choice(w)
+            mix_function()
+
+    def generate_initial_matrix(self):
+        """Генерирует начальную матрицу судоку"""
+        self.matrix = []
+        for i in range(self.size):
+            self.matrix += self.generate_initial_district(i)
+
+    def generate_initial_district(self, shift=0):
+        """Генерирует и возвращает начальный район из self.size квадратных блоков со сдвигом shift"""
+        initial_row = [i + 1 for i in range(self.size ** 2)]
+        w = [initial_row[i * self.size + shift:] + initial_row[:i * self.size + shift] for i in
+             range(self.size)]
+        return w
+
+    def generate_initial_mixed_matrix(self, k=5):
+        """Генерирует готовую перемешанную k раз матрицу судоку"""
+        self.generate_initial_matrix()
+        self.random_mix_matrix(k)
+
+    def delete_random_cells(self, k=25):
+        """Удалить рандомные ячейки, оставив k ячеек"""
+        variants = [(row, col) for row in range(self.size ** 2) for col in range(self.size ** 2)]
+        random.shuffle(variants)
+        for i in range(self.size ** 4 - k):
+            row, col = variants.pop()
+            self.matrix[row][col] = 0
+
+    def get_matrix(self):
+        return copy.deepcopy(self.matrix)
+
+    def generate_sudoku(self):
+        self.generate_initial_mixed_matrix()
+        self.delete_random_cells()
+
+
+pole = Sudoku()
+pole.generate_sudoku()
+pole.show()
+for _ in range(10):
+    print('-' * 50)
+    pole.show()
+    s = time()
+    print(*solve_sudoku(pole.get_matrix()), sep='\n')
+    print("%.03f" % (time() - s))
 
 
 class Ui_MainWindow(object):
@@ -95,9 +237,8 @@ class MainWindow(Ui_MainWindow, QMainWindow):
                 getattr(self, f'btn{i}{j}').setSizePolicy(sizePolicy)
                 getattr(self, f'btn{i}{j}').setMinimumSize(QtCore.QSize(30, 30))
 
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    ex = MainWindow()
-    ex.show()
-    sys.exit(app.exec())
+# if __name__ == '__main__':
+#     app = QApplication(sys.argv)
+#     ex = MainWindow()
+#     ex.show()
+#     sys.exit(app.exec())
