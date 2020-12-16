@@ -2,6 +2,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QTimer
 from itertools import product
+from threading import Thread
 from timeit import timeit
 import random
 import copy
@@ -28,7 +29,7 @@ LEVELS = {
     'EASY': (30, 35),
     'STANDARD': (25, 30),
     'HARD': (20, 25),
-    'HARDCORE': (15, 20)
+    'HARDCORE': (10, 20)
 }
 
 
@@ -111,11 +112,10 @@ class Sudoku:
         self.size = size
         self.solved_sudoku = None
         self.problem_sudoku = None
-        self.initialize_matrix()
 
     def initialize_matrix(self):
-        """Записывает в self.matrix матрицу размером self.size * self.size заполненную None"""
-        self.solved_sudoku = [[None for _ in range(self.size)] for _ in range(self.size)]
+        self.solved_sudoku = []
+        self.problem_sudoku = []
 
     def generate_initial_district(self, shift):
         """Генерирует и возвращает начальный район из self.size квадратных блоков со сдвигом shift"""
@@ -126,12 +126,14 @@ class Sudoku:
 
     def generate_initial_matrix(self):
         """Генерирует заполненную матрицу судоку"""
+        self.initialize_matrix()
         for i in range(self.size):
             self.solved_sudoku += self.generate_initial_district(i)
 
     def transpose_matrix(self):
         """Транспонирует матрицу"""
-        self.solved_sudoku = list(map(list, zip(*self.solved_sudoku)))
+
+        self.solved_sudoku = list(map(list, zip(*copy.deepcopy(self.solved_sudoku))))
 
     def change_rows(self):
         """Обменивает две случайные строки внутри одного района"""
@@ -155,6 +157,7 @@ class Sudoku:
         first = random.choice(variants)
         variants.remove(first)
         second = random.choice(variants)
+
         for i in range(self.size):
             self.solved_sudoku[first * self.size + i], \
             self.solved_sudoku[second * self.size + i] = self.solved_sudoku[second * self.size + i], \
@@ -166,7 +169,7 @@ class Sudoku:
         self.change_row_districts()
         self.transpose_matrix()
 
-    def random_mix_matrix(self, k=5):
+    def random_mix_matrix(self, k=10):
         """Совершает k случайных действий над матрицей,
          не приводящих к недопустимым позициям"""
         mix_functions = [self.transpose_matrix,
@@ -174,6 +177,7 @@ class Sudoku:
                          self.change_cols,
                          self.change_row_districts,
                          self.change_col_districts]
+
         for _ in range(k):
             mix_function = random.choice(mix_functions)
             mix_function()
@@ -186,7 +190,7 @@ class Sudoku:
             for j, element in enumerate(row):
                 cell_value = str(element) if element else ''
                 cell_value = cell_value.rjust(number_of_symbols, ' ')
-                print(cell_value, end='')
+                print(' ' + cell_value + ' ', end='')
             print()
         print()
 
@@ -221,34 +225,58 @@ class Sudoku:
 
         problem_sudoku = self.get_solved_matrix()
 
-        difficult_max, difficult_min = difficult
+        cells = self.size ** 4
 
-        variants = [(row, col) for row in range(self.size ** 4) for col in range(self.size ** 4)]
-        print(*variants, sep='\n')
+        difficult_max, difficult_min = difficult
+        difficult_min = cells - difficult_min
+        difficult_max = cells - difficult_max
+
+        variants = [(row, col, problem_sudoku[row][col]) for row in range(self.size ** 2)
+                    for col in range(self.size ** 2)]
         random.shuffle(variants)
 
-        attempts_max_count = 10
+        history = []
+
+        maximum_difficult = 0
+        maximum_sudoku = None
+
         attempts = 0
+        max_attempts_count = 1000
+
         current_difficult = 0
         while current_difficult < difficult_max:
-            row, col = variants.pop()
-            deleted_value = problem_sudoku[row][col]
+            row, col, value = variants.pop()
             problem_sudoku[row][col] = 0
-
             solutions = 0
             for _ in solve_sudoku((self.size, self.size), problem_sudoku):
                 solutions += 1
             if solutions == 1:
                 current_difficult += 1
+                if current_difficult > maximum_difficult:
+                    maximum_difficult = current_difficult
+                    maximum_sudoku = copy.deepcopy(problem_sudoku)
+                if variants:
+                    history.append(((row, col, value), copy.deepcopy(problem_sudoku),
+                                    copy.deepcopy(variants), current_difficult))
             else:
-                problem_sudoku[row][col] = deleted_value
+                problem_sudoku[row][col] = value
 
-                if current_difficult >= difficult_min:
-                    attempts += 1
-                if attempts > attempts_max_count:
-                    break
+            if not variants:
+                deleted, problem_sudoku, variants, current_difficult = history.pop()
+                row, col, value = deleted
+                problem_sudoku[row][col] = value
 
-                variants = [(row, col)] + variants
+            attempts += 1
+            if attempts > max_attempts_count:
+                problem_sudoku = copy.deepcopy(maximum_sudoku)
+                current_difficult = maximum_difficult
+                break
+
+            # print('Max Target:', difficult_max, 'Max Founded:', maximum_difficult,
+            #       'Current:', current_difficult, 'Attempt', attempts)
+
+        print('Total:', current_difficult)
+        print('Target:', difficult_max, difficult_min)
 
         self.problem_sudoku = problem_sudoku
 
@@ -261,11 +289,6 @@ class Sudoku:
     def get_problem_matrix(self):
         """Возвращает копию текущей незаполненной матрицы"""
         return copy.deepcopy(self.problem_sudoku)
-
-
-s = Sudoku()
-matrix = s.generate_sudoku(LEVELS['HARD'])
-s.show_problem_matrix()
 
 
 class Ui_MainWindow(object):
@@ -438,6 +461,7 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         else:
             self.action_11.setText('Показать таймер')
 
+
 # if __name__ == '__main__':
 #     app = QApplication(sys.argv)
 #     ex = MainWindow()
@@ -449,3 +473,38 @@ class MainWindow(Ui_MainWindow, QMainWindow):
 #
 #     ex.show()
 #     sys.exit(app.exec())
+
+
+class MyThread(Thread):
+    def __init__(self, sudoku_level_name, log, name):
+        super().__init__()
+        self.log = log
+        self.sudoku_level_name = sudoku_level_name
+        self.sudoku_level = LEVELS[sudoku_level_name]
+        self.name = name
+
+    def run(self):
+        sudoku = Sudoku()
+        now = datetime.datetime.now()
+        sudoku.generate_sudoku(self.sudoku_level)
+        t = datetime.datetime.now() - now
+        temp = []
+        temp.append('=' * 100)
+        temp.append(' '.join(['Поток', self.name,
+                              self.sudoku_level_name,
+                              'завершил работу за', str(t.seconds), 'секунд']))
+        temp.append(sudoku)
+        self.log.append(temp)
+
+
+if __name__ == '__main__':
+    i = 0
+    w = []
+    for key in LEVELS:
+        i += 1
+        thread = MyThread(key, w, 'thread%i' % i)
+        thread.start()
+        thread.join()
+    for event in w:
+        print(*event[:-1], sep='\n')
+        event[-1].show_problem_matrix()
