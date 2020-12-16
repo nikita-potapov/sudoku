@@ -2,6 +2,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QTimer
 from itertools import product
+from timeit import timeit
 import random
 import copy
 import sys
@@ -23,10 +24,17 @@ EMPTY = 0
 IN_GAME = 1
 GAME_SOLVED = 2
 
+LEVELS = {
+    'EASY': (30, 35),
+    'STANDARD': (25, 30),
+    'HARD': (20, 25),
+    'HARDCORE': (15, 20)
+}
+
 
 def solve_sudoku(size, grid):
-    """ An efficient Sudoku solver using Algorithm X"""
-
+    """Интерпретация алгоритма X для решения судоку"""
+    grid = copy.deepcopy(grid)
     R, C = size
     N = R * C
     X = ([("rc", rc) for rc in product(range(N), range(N))] +
@@ -95,135 +103,169 @@ def deselect(X, Y, r, cols):
 
 
 class Sudoku:
-    """Класс судоку матрицы"""
+    """Класс матрицы для судоку"""
 
     def __init__(self, size=3):
+        """Параметр size задает размер квадратов, на которые разбивается матрица,
+        то есть конечная матрица будет иметь размер size ** 2 на size ** 2"""
         self.size = size
-        self.full_matrix = []
-        self.problem_matrix = []
+        self.solved_sudoku = None
+        self.problem_sudoku = None
+        self.initialize_matrix()
 
-    def show(self, matrix=None):
-        """Выводит судоку в консоль"""
-        if matrix is None:
-            matrix = self.problem_matrix
-        for row in range(self.size ** 2):
-            for col in range(self.size ** 2):
-                if matrix[row][col] != 0:
-                    print(f'{matrix[row][col]:3d}', end='')
-                else:
-                    print('   ', end='')
-            print()
-        print()
+    def initialize_matrix(self):
+        """Записывает в self.matrix матрицу размером self.size * self.size заполненную None"""
+        self.solved_sudoku = [[None for _ in range(self.size)] for _ in range(self.size)]
 
-    def transpose(self, matrix=None):
+    def generate_initial_district(self, shift):
+        """Генерирует и возвращает начальный район из self.size квадратных блоков со сдвигом shift"""
+        initial_row = [i + 1 for i in range(self.size ** 2)]
+        district = [initial_row[i * self.size + shift:] +
+                    initial_row[:i * self.size + shift] for i in range(self.size)]
+        return district
+
+    def generate_initial_matrix(self):
+        """Генерирует заполненную матрицу судоку"""
+        for i in range(self.size):
+            self.solved_sudoku += self.generate_initial_district(i)
+
+    def transpose_matrix(self):
         """Транспонирует матрицу"""
-        if matrix is None:
-            self.full_matrix = list(map(list, zip(*self.full_matrix)))
-        else:
-            return list(map(list, zip(*matrix)))
+        self.solved_sudoku = list(map(list, zip(*self.solved_sudoku)))
 
     def change_rows(self):
+        """Обменивает две случайные строки внутри одного района"""
         start = random.choice(range(self.size))
         variants = list(range(start * self.size, start * self.size + self.size))
         random.shuffle(variants)
         first = variants.pop()
         second = variants.pop()
-        self.full_matrix[first], self.full_matrix[second] = self.full_matrix[second], \
-                                                            self.full_matrix[first]
+        self.solved_sudoku[first], self.solved_sudoku[second] = self.solved_sudoku[second], \
+                                                                self.solved_sudoku[first]
 
     def change_cols(self):
-        self.transpose()
+        """Обменивает два случайных столбца внутри одного района"""
+        self.transpose_matrix()
         self.change_rows()
-        self.transpose()
+        self.transpose_matrix()
 
     def change_row_districts(self):
-        """Обменивает два случайных района по горизонтали"""
+        """Обменивает два случайных горизонтальных района"""
         variants = list(range(self.size))
         first = random.choice(variants)
         variants.remove(first)
         second = random.choice(variants)
-
         for i in range(self.size):
-            self.full_matrix[first * self.size + i], \
-            self.full_matrix[second * self.size + i] = self.full_matrix[second * self.size + i], \
-                                                       self.full_matrix[first * self.size + i]
+            self.solved_sudoku[first * self.size + i], \
+            self.solved_sudoku[second * self.size + i] = self.solved_sudoku[second * self.size + i], \
+                                                         self.solved_sudoku[first * self.size + i]
 
     def change_col_districts(self):
-        """Обменивает два случайных района по вертикали"""
-        self.transpose()
+        """Обменивает два случайных вертикальных района"""
+        self.transpose_matrix()
         self.change_row_districts()
-        self.transpose()
+        self.transpose_matrix()
 
     def random_mix_matrix(self, k=5):
-        w = [self.transpose,
-             self.change_rows,
-             self.change_cols,
-             self.change_row_districts,
-             self.change_col_districts]
+        """Совершает k случайных действий над матрицей,
+         не приводящих к недопустимым позициям"""
+        mix_functions = [self.transpose_matrix,
+                         self.change_rows,
+                         self.change_cols,
+                         self.change_row_districts,
+                         self.change_col_districts]
         for _ in range(k):
-            mix_function = random.choice(w)
+            mix_function = random.choice(mix_functions)
             mix_function()
 
-    def generate_initial_matrix(self):
-        """Генерирует начальную матрицу судоку"""
-        self.full_matrix = []
-        for i in range(self.size):
-            self.full_matrix += self.generate_initial_district(i)
+    def _show_matrix_as_sudoku(self, showed_matrix):
+        """Выводит матрицу в консоль в виде судоку"""
+        showed_matrix = copy.deepcopy(showed_matrix)
+        number_of_symbols = len(str(self.size ** 2))
+        for i, row in enumerate(showed_matrix):
+            for j, element in enumerate(row):
+                cell_value = str(element) if element else ''
+                cell_value = cell_value.rjust(number_of_symbols, ' ')
+                print(cell_value, end='')
+            print()
+        print()
 
-    def generate_initial_district(self, shift=0):
-        """Генерирует и возвращает начальный район из self.size квадратных блоков со сдвигом shift"""
-        initial_row = [i + 1 for i in range(self.size ** 2)]
-        w = [initial_row[i * self.size + shift:] + initial_row[:i * self.size + shift] for i in
-             range(self.size)]
-        return w
+    def show_solved_matrix(self, as_matrix=False):
+        """Выводит решенную матрицу в консоль"""
+        if as_matrix:
+            for row in self.solved_sudoku:
+                print(row)
+        else:
+            self._show_matrix_as_sudoku(self.solved_sudoku)
 
-    def generate_initial_mixed_matrix(self, k=5):
-        """Генерирует готовую перемешанную k раз матрицу судоку"""
+    def show_problem_matrix(self, as_matrix=False):
+        """Выводит нерешенную матрицу в консоль"""
+        if as_matrix:
+            for row in self.solved_sudoku:
+                print(row)
+        else:
+            self._show_matrix_as_sudoku(self.problem_sudoku)
+
+    def set_sudoku_size(self, size):
+        """Устанавливает новый размер судоку матрицы,
+         генерирует новую матрицу"""
+        self.size = size
+
+    def generate_sudoku(self, difficult: tuple):
+        """Генерирует и возвращает судоку определенного уровня сложности difficult,
+        представленным в виде кортежа наименьшего и наибольшего возможного
+        количества оставшихся на поле клеток"""
+        self.initialize_matrix()
         self.generate_initial_matrix()
-        self.random_mix_matrix(k)
+        self.random_mix_matrix()
 
-    def delete_random_cells(self, k=2):
-        """Удалить рандомные ячейки, оставив k пустых рядов + пустых столбцов"""
-        self.problem_matrix = copy.deepcopy(self.full_matrix)
-        variants = [(row, col) for row in range(self.size ** 2) for col in range(self.size ** 2)]
+        problem_sudoku = self.get_solved_matrix()
+
+        difficult_max, difficult_min = difficult
+
+        variants = [(row, col) for row in range(self.size ** 4) for col in range(self.size ** 4)]
+        print(*variants, sep='\n')
         random.shuffle(variants)
 
-        empties = k * self.size * 2
+        attempts_max_count = 10
+        attempts = 0
+        current_difficult = 0
+        while current_difficult < difficult_max:
+            row, col = variants.pop()
+            deleted_value = problem_sudoku[row][col]
+            problem_sudoku[row][col] = 0
 
-        count = 0
-        while count < empties:
-            cell_row, cell_col = variants.pop()
-            temp = self.problem_matrix[cell_col][cell_col]
-            self.problem_matrix[cell_row][cell_col] = 0
-
-            number_of_solutions = len(list(solve_sudoku((self.size, self.size),
-                                                        self.problem_matrix)))
-            if number_of_solutions == 1:
-                count += 1
+            solutions = 0
+            for _ in solve_sudoku((self.size, self.size), problem_sudoku):
+                solutions += 1
+            if solutions == 1:
+                current_difficult += 1
             else:
-                self.problem_matrix[cell_row][cell_col] = temp
-                variants = [(cell_row, cell_col)] + variants
+                problem_sudoku[row][col] = deleted_value
 
-    def get_full_matrix(self):
-        return copy.deepcopy(self.full_matrix)
+                if current_difficult >= difficult_min:
+                    attempts += 1
+                if attempts > attempts_max_count:
+                    break
+
+                variants = [(row, col)] + variants
+
+        self.problem_sudoku = problem_sudoku
+
+        return problem_sudoku
+
+    def get_solved_matrix(self):
+        """Возвращает копию текущей заполненной матрицы"""
+        return copy.deepcopy(self.solved_sudoku)
 
     def get_problem_matrix(self):
-        return copy.deepcopy(self.problem_matrix)
-
-    def generate_sudoku(self, difficult=2):
-        self.generate_initial_mixed_matrix()
-        self.delete_random_cells(difficult)
-
-    def get_empty_rows_and_cols(self, matrix=None):
-        """Считает количество пустых строк и столбцов в матрице"""
-        if matrix is None:
-            matrix = self.problem_matrix
-        return len([all(row) for row in matrix + self.transpose(matrix) if all(row)])
+        """Возвращает копию текущей незаполненной матрицы"""
+        return copy.deepcopy(self.problem_sudoku)
 
 
 s = Sudoku()
-s.generate_sudoku()
-# s.show()
+matrix = s.generate_sudoku(LEVELS['HARD'])
+s.show_problem_matrix()
 
 
 class Ui_MainWindow(object):
