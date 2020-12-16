@@ -4,9 +4,11 @@ from PyQt5.QtCore import QTimer
 from itertools import product
 from threading import Thread
 from timeit import timeit
+import sqlite3
 import random
 import copy
 import sys
+import os
 import datetime
 
 hardcore = [[8, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -112,6 +114,9 @@ class Sudoku:
         self.size = size
         self.solved_sudoku = None
         self.problem_sudoku = None
+        self.generation_time = None
+        self.timestamp = None
+        self.difficult_level_name = None
 
     def initialize_matrix(self):
         self.solved_sudoku = []
@@ -215,10 +220,13 @@ class Sudoku:
          генерирует новую матрицу"""
         self.size = size
 
-    def generate_sudoku(self, difficult: tuple):
+    def generate_sudoku(self, difficult_level_name):
         """Генерирует и возвращает судоку определенного уровня сложности difficult,
         представленным в виде кортежа наименьшего и наибольшего возможного
         количества оставшихся на поле клеток"""
+        self.difficult_level_name = difficult_level_name
+        start_generation_time = datetime.datetime.now()
+
         self.initialize_matrix()
         self.generate_initial_matrix()
         self.random_mix_matrix()
@@ -227,7 +235,7 @@ class Sudoku:
 
         cells = self.size ** 4
 
-        difficult_max, difficult_min = difficult
+        difficult_max, difficult_min = LEVELS[difficult_level_name]
         difficult_min = cells - difficult_min
         difficult_max = cells - difficult_max
 
@@ -275,10 +283,14 @@ class Sudoku:
             # print('Max Target:', difficult_max, 'Max Founded:', maximum_difficult,
             #       'Current:', current_difficult, 'Attempt', attempts)
 
-        print('Total:', current_difficult)
-        print('Target:', difficult_max, difficult_min)
+        # print('Total:', current_difficult)
+        # print('Target:', difficult_max, difficult_min)
 
         self.problem_sudoku = problem_sudoku
+
+        self.generation_time = datetime.datetime.now() - start_generation_time
+        self.generation_time = self.generation_time.microseconds
+        self.timestamp = datetime.datetime.timestamp()
 
         return problem_sudoku
 
@@ -289,6 +301,19 @@ class Sudoku:
     def get_problem_matrix(self):
         """Возвращает копию текущей незаполненной матрицы"""
         return copy.deepcopy(self.problem_sudoku)
+
+    def get_timestamp(self):
+        return self.timestamp
+
+    def get_generation_time(self):
+        return self.generation_time
+
+    def get_difficult_level_name(self):
+        return self.difficult_level_name
+
+    def get_size(self):
+        """Возвращает размер самого маленького квадрата судоку"""
+        return self.size
 
 
 class Ui_MainWindow(object):
@@ -486,7 +511,7 @@ class MyThread(Thread):
     def run(self):
         sudoku = Sudoku()
         now = datetime.datetime.now()
-        sudoku.generate_sudoku(self.sudoku_level)
+        sudoku.generate_sudoku(self.sudoku_level_name)
         t = datetime.datetime.now() - now
         temp = []
         temp.append('=' * 100)
@@ -495,6 +520,35 @@ class MyThread(Thread):
                               'завершил работу за', str(t.seconds), 'секунд']))
         temp.append(sudoku)
         self.log.append(temp)
+
+
+class MyDataBaseCursor:
+    def __init__(self, db_path: str):
+        self.connection = sqlite3.connect(db_path)
+        self.cursor = self.connection.cursor()
+
+    def insert_sudoku_into_db(self, sudoku) -> None:
+        problem_matrix = self._matrix_to_str(sudoku.get_problem_matrix())
+        solved_matrix = self._matrix_to_str(sudoku.get_solved_matrix())
+        sudoku_level = sudoku.get_difficult_level_name()
+        generation_time = sudoku.get_generation_time()
+        timestamp = sudoku.get_timestamp()
+        size = sudoku.get_size()
+        self.cursor.execute(f"""INSERT INTO sudoku_matrixes(size, level, timestamp,
+         solved_matrix, problem_matrix, generation_time) VALUES ({size, sudoku_level,
+                                                                  timestamp, solved_matrix,
+                                                                  problem_matrix,
+                                                                  generation_time})""")
+
+    def get_sudoku_from_db(self, **kwargs):
+        # TODO
+        pass
+
+    def _matrix_to_str(self, matrix: list) -> str:
+        return str(matrix)
+
+    def _str_to_matrix(self, s: str) -> list:
+        return [row.strip()[1:-1].split(', ') for row in s.strip()[1:-1].split(', ')]
 
 
 if __name__ == '__main__':
