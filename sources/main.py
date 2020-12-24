@@ -38,71 +38,76 @@ LEVELS = {
 def solve_sudoku(size, grid):
     """Интерпретация алгоритма X для решения судоку"""
     grid = copy.deepcopy(grid)
-    R, C = size
-    N = R * C
-    X = ([("rc", rc) for rc in product(range(N), range(N))] +
-         [("rn", rn) for rn in product(range(N), range(1, N + 1))] +
-         [("cn", cn) for cn in product(range(N), range(1, N + 1))] +
-         [("bn", bn) for bn in product(range(N), range(1, N + 1))])
-    Y = dict()
-    for r, c, n in product(range(N), range(N), range(1, N + 1)):
-        b = (r // R) * R + (c // C)  # Box number
-        Y[(r, c, n)] = [
+    rows_number, columns_number = size
+    cells_number = rows_number * columns_number
+    x_set = ([("rc", rc) for rc in product(range(cells_number), range(cells_number))] +
+             [("rn", rn) for rn in product(range(cells_number), range(1, cells_number + 1))] +
+             [("cn", cn) for cn in product(range(cells_number), range(1, cells_number + 1))] +
+             [("bn", bn) for bn in product(range(cells_number), range(1, cells_number + 1))])
+    y_set = dict()
+    for r, c, n in product(range(cells_number), range(cells_number), range(1, cells_number + 1)):
+        b = (r // rows_number) * rows_number + (c // columns_number)  # Box number
+        y_set[(r, c, n)] = [
             ("rc", (r, c)),
             ("rn", (r, n)),
             ("cn", (c, n)),
             ("bn", (b, n))]
-    X, Y = exact_cover(X, Y)
+    x_set, y_set = exact_cover(x_set, y_set)
     for i, row in enumerate(grid):
         for j, n in enumerate(row):
             if n:
-                select(X, Y, (i, j, n))
-    for solution in solve(X, Y, []):
+                select(x_set, y_set, (i, j, n))
+    cnt = 0
+    for solution in solve(x_set, y_set, []):
+        cnt += 1
         for (r, c, n) in solution:
             grid[r][c] = n
         yield grid
+        if cnt == 2:
+            break
 
 
-def exact_cover(X, Y):
-    X = {j: set() for j in X}
-    for i, row in Y.items():
+def exact_cover(x_set, y_set):
+    x_set = {j: set() for j in x_set}
+    for i, row in y_set.items():
         for j in row:
-            X[j].add(i)
-    return X, Y
+            x_set[j].add(i)
+    return x_set, y_set
 
 
-def solve(X, Y, solution):
-    if not X:
+def solve(x_set, y_set, solution):
+    if not x_set:
         yield list(solution)
     else:
-        c = min(X, key=lambda c: len(X[c]))
-        for r in list(X[c]):
+        c = min(x_set, key=lambda c: len(x_set[c]))
+        for r in list(x_set[c]):
             solution.append(r)
-            cols = select(X, Y, r)
-            for s in solve(X, Y, solution):
+            cols = select(x_set, y_set, r)
+
+            for s in solve(x_set, y_set, solution):
                 yield s
-            deselect(X, Y, r, cols)
+            deselect(x_set, y_set, r, cols)
             solution.pop()
 
 
-def select(X, Y, r):
+def select(x_set, y_set, r):
     cols = []
-    for j in Y[r]:
-        for i in X[j]:
-            for k in Y[i]:
+    for j in y_set[r]:
+        for i in x_set[j]:
+            for k in y_set[i]:
                 if k != j:
-                    X[k].remove(i)
-        cols.append(X.pop(j))
+                    x_set[k].remove(i)
+        cols.append(x_set.pop(j))
     return cols
 
 
-def deselect(X, Y, r, cols):
-    for j in reversed(Y[r]):
-        X[j] = cols.pop()
-        for i in X[j]:
-            for k in Y[i]:
+def deselect(x_set, y_set, r, cols):
+    for j in reversed(y_set[r]):
+        x_set[j] = cols.pop()
+        for i in x_set[j]:
+            for k in y_set[i]:
                 if k != j:
-                    X[k].add(i)
+                    x_set[k].add(i)
 
 
 class Sudoku:
@@ -165,7 +170,8 @@ class Sudoku:
 
         for i in range(self.size):
             self.solved_sudoku[first * self.size + i], \
-            self.solved_sudoku[second * self.size + i] = self.solved_sudoku[second * self.size + i], \
+            self.solved_sudoku[second * self.size + i] = self.solved_sudoku[
+                                                             second * self.size + i], \
                                                          self.solved_sudoku[first * self.size + i]
 
     def change_col_districts(self):
@@ -256,8 +262,11 @@ class Sudoku:
             row, col, value = variants.pop()
             problem_sudoku[row][col] = 0
             solutions = 0
+
             for _ in solve_sudoku((self.size, self.size), problem_sudoku):
                 solutions += 1
+                if solutions == 2:
+                    break
             if solutions == 1:
                 current_difficult += 1
                 if current_difficult > maximum_difficult:
@@ -290,8 +299,8 @@ class Sudoku:
 
         self.generation_time = datetime.datetime.now() - start_generation_time
         self.generation_time = self.generation_time.microseconds
-        self.timestamp = datetime.datetime.timestamp()
-
+        # self.timestamp = datetime.datetime.timestamp()
+        self.timestamp = None
         return problem_sudoku
 
     def get_solved_matrix(self):
@@ -556,9 +565,11 @@ if __name__ == '__main__':
     w = []
     for key in LEVELS:
         i += 1
-        thread = MyThread(key, w, 'thread%i' % i)
+        thread = MyThread('EASY', w, 'thread%i' % i)
         thread.start()
         thread.join()
+        break
+
     for event in w:
         print(*event[:-1], sep='\n')
         event[-1].show_problem_matrix()
