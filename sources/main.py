@@ -34,37 +34,43 @@ LEVELS = {
     'HARDCORE': (10, 20)
 }
 
+DB_NAME = 'sudoku.db'
+
 
 def solve_sudoku(size, grid):
     """Интерпретация алгоритма X для решения судоку"""
     grid = copy.deepcopy(grid)
-    rows_number, columns_number = size
-    cells_number = rows_number * columns_number
-    x_set = ([("rc", rc) for rc in product(range(cells_number), range(cells_number))] +
-             [("rn", rn) for rn in product(range(cells_number), range(1, cells_number + 1))] +
-             [("cn", cn) for cn in product(range(cells_number), range(1, cells_number + 1))] +
-             [("bn", bn) for bn in product(range(cells_number), range(1, cells_number + 1))])
+    rows_count, colums_count = size
+    cells_count = rows_count * colums_count
+    x_set = ([("rc", rc) for rc in product(range(cells_count), range(cells_count))] +
+             [("rn", rn) for rn in product(range(cells_count), range(1, cells_count + 1))] +
+             [("cn", cn) for cn in product(range(cells_count), range(1, cells_count + 1))] +
+             [("bn", bn) for bn in product(range(cells_count), range(1, cells_count + 1))])
     y_set = dict()
-    for r, c, n in product(range(cells_number), range(cells_number), range(1, cells_number + 1)):
-        b = (r // rows_number) * rows_number + (c // columns_number)  # Box number
+    for r, c, n in product(range(cells_count), range(cells_count), range(1, cells_count + 1)):
+        b = (r // rows_count) * rows_count + (c // colums_count)
         y_set[(r, c, n)] = [
             ("rc", (r, c)),
             ("rn", (r, n)),
             ("cn", (c, n)),
             ("bn", (b, n))]
+
     x_set, y_set = exact_cover(x_set, y_set)
     for i, row in enumerate(grid):
         for j, n in enumerate(row):
             if n:
                 select(x_set, y_set, (i, j, n))
-    cnt = 0
+
+    count = 0
     for solution in solve(x_set, y_set, []):
-        cnt += 1
-        for (r, c, n) in solution:
-            grid[r][c] = n
+        if not solution:
+            return False
+        for (row, col, number) in solution:
+            grid[row][col] = number
+        count += 1
+        if count > 2:
+            return False
         yield grid
-        if cnt == 2:
-            break
 
 
 def exact_cover(x_set, y_set):
@@ -83,8 +89,11 @@ def solve(x_set, y_set, solution):
         for r in list(x_set[c]):
             solution.append(r)
             cols = select(x_set, y_set, r)
-
+            count = 0
             for s in solve(x_set, y_set, solution):
+                count += 1
+                if count > 2:
+                    yield False
                 yield s
             deselect(x_set, y_set, r, cols)
             solution.pop()
@@ -110,18 +119,51 @@ def deselect(x_set, y_set, r, cols):
                     x_set[k].add(i)
 
 
+class MyDataBaseCursor:
+    def __init__(self, db_path: str):
+        self.connection = sqlite3.connect(db_path)
+        self.cursor = self.connection.cursor()
+
+    def insert_sudoku_into_db(self, sudoku) -> None:
+        problem_matrix = self._matrix_to_str(sudoku.get_problem_matrix())
+        solved_matrix = self._matrix_to_str(sudoku.get_solved_matrix())
+        sudoku_level = sudoku.get_difficult_level_name()
+        timestamp = sudoku.get_timestamp()
+        size = sudoku.get_size()
+
+        data = {'problem_matrix': problem_matrix,
+                'solved_matrix': solved_matrix,
+                'sudoku_level': sudoku_level,
+                'timestamp': timestamp,
+                'size': size}
+
+        self.cursor.execute(f"""INSERT INTO matrixes({', '.join([str(key) for key in data.keys()])})
+         VALUES ({', '.join([str(data[key]) for key in data.keys()])}""")
+
+    def get_sudoku_from_db(self, **kwargs):
+        # TODO
+        pass
+
+    def _matrix_to_str(self, matrix: list) -> str:
+        return str(matrix)
+
+    def _str_to_matrix(self, s: str) -> list:
+        return [row.strip()[1:-1].split(', ') for row in s.strip()[1:-1].split(', ')]
+
+
 class Sudoku:
     """Класс матрицы для судоку"""
 
-    def __init__(self, size=3):
+    def __init__(self, size=3, level=None, timestamp=None,
+                 solved_sudoku=None, problem_sudoku=None):
         """Параметр size задает размер квадратов, на которые разбивается матрица,
         то есть конечная матрица будет иметь размер size ** 2 на size ** 2"""
         self.size = size
-        self.solved_sudoku = None
-        self.problem_sudoku = None
-        self.generation_time = None
-        self.timestamp = None
-        self.difficult_level_name = None
+        self.solved_sudoku = solved_sudoku
+        self.problem_sudoku = problem_sudoku
+        self.timestamp = timestamp
+        self.difficult_level_name = level
+        self.constant = True if self.solved_sudoku else False
 
     def initialize_matrix(self):
         self.solved_sudoku = []
@@ -230,77 +272,71 @@ class Sudoku:
         """Генерирует и возвращает судоку определенного уровня сложности difficult,
         представленным в виде кортежа наименьшего и наибольшего возможного
         количества оставшихся на поле клеток"""
-        self.difficult_level_name = difficult_level_name
-        start_generation_time = datetime.datetime.now()
+        if not self.constant:
+            self.difficult_level_name = difficult_level_name
 
-        self.initialize_matrix()
-        self.generate_initial_matrix()
-        self.random_mix_matrix()
+            self.initialize_matrix()
+            self.generate_initial_matrix()
+            self.random_mix_matrix()
 
-        problem_sudoku = self.get_solved_matrix()
+            problem_sudoku = self.get_solved_matrix()
 
-        cells = self.size ** 4
+            cells = self.size ** 4
 
-        difficult_max, difficult_min = LEVELS[difficult_level_name]
-        difficult_min = cells - difficult_min
-        difficult_max = cells - difficult_max
+            difficult_max, difficult_min = LEVELS[difficult_level_name]
+            difficult_max = cells - difficult_max
 
-        variants = [(row, col, problem_sudoku[row][col]) for row in range(self.size ** 2)
-                    for col in range(self.size ** 2)]
-        random.shuffle(variants)
+            variants = [(row, col, problem_sudoku[row][col]) for row in range(self.size ** 2)
+                        for col in range(self.size ** 2)]
+            random.shuffle(variants)
 
-        history = []
+            history = []
 
-        maximum_difficult = 0
-        maximum_sudoku = None
+            maximum_difficult = 0
+            maximum_sudoku = None
 
-        attempts = 0
-        max_attempts_count = 1000
+            attempts = 0
+            max_attempts_count = 1000
 
-        current_difficult = 0
-        while current_difficult < difficult_max:
-            row, col, value = variants.pop()
-            problem_sudoku[row][col] = 0
-            solutions = 0
+            current_difficult = 0
+            while current_difficult < difficult_max:
+                row, col, value = variants.pop()
+                problem_sudoku[row][col] = 0
+                solutions = 0
+                for _ in solve_sudoku((self.size, self.size), problem_sudoku):
+                    solutions += 1
+                if solutions == 1:
+                    current_difficult += 1
+                    if current_difficult > maximum_difficult:
+                        maximum_difficult = current_difficult
+                        # TODO
+                        # print('NEW MAXIMUM DIFFICULT', maximum_difficult)
+                        maximum_sudoku = copy.deepcopy(problem_sudoku)
+                    if variants:
+                        history.append(((row, col, value), copy.deepcopy(problem_sudoku),
+                                        copy.deepcopy(variants), current_difficult))
+                else:
+                    problem_sudoku[row][col] = value
 
-            for _ in solve_sudoku((self.size, self.size), problem_sudoku):
-                solutions += 1
-                if solutions == 2:
+                if not variants:
+                    deleted, problem_sudoku, variants, current_difficult = history.pop()
+                    row, col, value = deleted
+                    problem_sudoku[row][col] = value
+
+                attempts += 1
+                if attempts > max_attempts_count:
+                    problem_sudoku = copy.deepcopy(maximum_sudoku)
+                    current_difficult = maximum_difficult
                     break
-            if solutions == 1:
-                current_difficult += 1
-                if current_difficult > maximum_difficult:
-                    maximum_difficult = current_difficult
-                    maximum_sudoku = copy.deepcopy(problem_sudoku)
-                if variants:
-                    history.append(((row, col, value), copy.deepcopy(problem_sudoku),
-                                    copy.deepcopy(variants), current_difficult))
-            else:
-                problem_sudoku[row][col] = value
 
-            if not variants:
-                deleted, problem_sudoku, variants, current_difficult = history.pop()
-                row, col, value = deleted
-                problem_sudoku[row][col] = value
+            print('Max Target:', difficult_max, 'Max Founded:', maximum_difficult,
+                  'Current:', current_difficult, 'Attempt', attempts)
 
-            attempts += 1
-            if attempts > max_attempts_count:
-                problem_sudoku = copy.deepcopy(maximum_sudoku)
-                current_difficult = maximum_difficult
-                break
+            self.problem_sudoku = problem_sudoku
+            self.timestamp = datetime.datetime.timestamp(datetime.datetime.now())
+        else:
+            problem_sudoku = copy.deepcopy(self.problem_sudoku)
 
-            # print('Max Target:', difficult_max, 'Max Founded:', maximum_difficult,
-            #       'Current:', current_difficult, 'Attempt', attempts)
-
-        # print('Total:', current_difficult)
-        # print('Target:', difficult_max, difficult_min)
-
-        self.problem_sudoku = problem_sudoku
-
-        self.generation_time = datetime.datetime.now() - start_generation_time
-        self.generation_time = self.generation_time.microseconds
-        # self.timestamp = datetime.datetime.timestamp()
-        self.timestamp = None
         return problem_sudoku
 
     def get_solved_matrix(self):
@@ -313,9 +349,6 @@ class Sudoku:
 
     def get_timestamp(self):
         return self.timestamp
-
-    def get_generation_time(self):
-        return self.generation_time
 
     def get_difficult_level_name(self):
         return self.difficult_level_name
@@ -402,8 +435,8 @@ class MainWindow(Ui_MainWindow, QMainWindow):
 
         self.action_11.triggered.connect(self.show_hide_timer)
 
-        self.database_connection = None
         self.database_cursor = None
+        self.connect_db()
 
         self.timer = QTimer(self)
         self.timer.start(PROGRAM_SECOND)
@@ -412,7 +445,7 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.is_show_timer = True
         self.showtime()
 
-        for i in range(7, 10):
+        for i in range(7, 11):
             getattr(self, 'action_%d' % i).triggered.connect(self.new_game_btn_clicked)
 
         self.main_layout = QtWidgets.QGridLayout(self.centralwidget)
@@ -446,34 +479,35 @@ class MainWindow(Ui_MainWindow, QMainWindow):
 
     def load_matrix(self, matrix=None):
         if matrix is None:
-            matrix = self.sudoku.get_matrix()
+            matrix = self.sudoku.get_problem_matrix()
         for i in range(len(matrix)):
             for j in range(len(matrix)):
+                getattr(self, f'btn{i}{j}').setDisabled(False)
                 getattr(self, f'btn{i}{j}').setText(str(matrix[i][j]) if matrix[i][j] else ' ')
+                if getattr(self, f'btn{i}{j}').text() != ' ':
+                    getattr(self, f'btn{i}{j}').setDisabled(True)
 
     def new_game_btn_clicked(self):
-        if self.game_state != EMPTY:
-            mb = QtWidgets.QMessageBox
-            answer = mb.question(self, '',
-                                 'Сохранить текущую игру?',
-                                 mb.No | mb.Yes, mb.No)
-            if answer == mb.Yes:
-                self.save_game()
+        self.check_save()
         btn = self.sender()
         levels = {
-            "Легко 👶": 2,
-            "Средне 👦": 5,
-            "Сложно 🤓": 7,
-            "Адски сложно 🎓": 9
+            "Легко 👶": 'EASY',
+            "Средне 👦": 'STANDARD',
+            "Сложно 🤓": 'HARD',
+            "Адски сложно 🎓": 'HARDCORE'
         }
         level = levels[btn.text()]
+        print(level)
         self.sudoku.generate_sudoku(level)
         self.load_matrix()
         self.reset_time()
         self.game_state = IN_GAME
 
     def save_game(self):
-        pass
+        try:
+            self.database_cursor.insert_sudoku_into_db(self.sudoku)
+        except Exception as e:
+            print(e)
 
     def reset_time(self):
         self.game_seconds = 0
@@ -495,18 +529,35 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         else:
             self.action_11.setText('Показать таймер')
 
+    def connect_db(self):
+        try:
+            self.database_cursor = MyDataBaseCursor(DB_NAME)
+        except Exception as e:
+            print(e)
 
-# if __name__ == '__main__':
-#     app = QApplication(sys.argv)
-#     ex = MainWindow()
-#
-#     pole = Sudoku()
-#     pole.generate_sudoku()
-#
-#     ex.load_matrix(pole.get_matrix())
-#
-#     ex.show()
-#     sys.exit(app.exec())
+    def closeEvent(self, a0: QtGui.QCloseEvent) -> None:
+        self.check_save()
+
+    def check_save(self):
+        if self.game_state != EMPTY:
+            mb = QtWidgets.QMessageBox
+            answer = mb.question(self, '',
+                                 'Сохранить текущую игру?',
+                                 mb.No | mb.Yes)
+
+            if answer == mb.Yes:
+                self.save_game()
+            elif answer == mb.No:
+                return False
+            elif answer == 65536:
+                return None
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = MainWindow()
+    ex.show()
+    sys.exit(app.exec())
 
 
 class MyThread(Thread):
@@ -526,50 +577,7 @@ class MyThread(Thread):
         temp.append('=' * 100)
         temp.append(' '.join(['Поток', self.name,
                               self.sudoku_level_name,
-                              'завершил работу за', str(t.seconds), 'секунд']))
+                              'завершил работу за', str(t.microseconds / 1000000), 'секунд']))
         temp.append(sudoku)
         self.log.append(temp)
-
-
-class MyDataBaseCursor:
-    def __init__(self, db_path: str):
-        self.connection = sqlite3.connect(db_path)
-        self.cursor = self.connection.cursor()
-
-    def insert_sudoku_into_db(self, sudoku) -> None:
-        problem_matrix = self._matrix_to_str(sudoku.get_problem_matrix())
-        solved_matrix = self._matrix_to_str(sudoku.get_solved_matrix())
-        sudoku_level = sudoku.get_difficult_level_name()
-        generation_time = sudoku.get_generation_time()
-        timestamp = sudoku.get_timestamp()
-        size = sudoku.get_size()
-        self.cursor.execute(f"""INSERT INTO sudoku_matrixes(size, level, timestamp,
-         solved_matrix, problem_matrix, generation_time) VALUES ({size, sudoku_level,
-                                                                  timestamp, solved_matrix,
-                                                                  problem_matrix,
-                                                                  generation_time})""")
-
-    def get_sudoku_from_db(self, **kwargs):
-        # TODO
-        pass
-
-    def _matrix_to_str(self, matrix: list) -> str:
-        return str(matrix)
-
-    def _str_to_matrix(self, s: str) -> list:
-        return [row.strip()[1:-1].split(', ') for row in s.strip()[1:-1].split(', ')]
-
-
-if __name__ == '__main__':
-    i = 0
-    w = []
-    for key in LEVELS:
-        i += 1
-        thread = MyThread('EASY', w, 'thread%i' % i)
-        thread.start()
-        thread.join()
-        break
-
-    for event in w:
-        print(*event[:-1], sep='\n')
-        event[-1].show_problem_matrix()
+        print(temp)
