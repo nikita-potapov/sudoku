@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QWidget
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QTimer
 from itertools import product
@@ -25,16 +25,49 @@ PROGRAM_SECOND = 1000
 
 EMPTY = 0
 IN_GAME = 1
-GAME_SOLVED = 2
+PAUSE = 2
+GAME_SOLVED = 3
 
-LEVELS = {
+LEVELS_SETTINGS = {
     'EASY': (30, 35),
     'STANDARD': (25, 30),
-    'HARD': (20, 25),
-    'HARDCORE': (10, 20)
+    'HARD': (20, 25)
 }
 
-DB_NAME = 'sudoku.db'
+DB_NAME = 'sudoku.sqlite3'
+
+ATTEMPTS_MAX_COUNT = 10000
+
+CREATE_DATABASE_SCRIPT = """CREATE TABLE matrixes (
+    id             INTEGER       PRIMARY KEY AUTOINCREMENT
+                                 UNIQUE
+                                 NOT NULL,
+    size           INTEGER       NOT NULL,
+    level          INTEGER       NOT NULL,
+    timestamp      INTEGER       NOT NULL,
+    solved_matrix  STRING (2000) NOT NULL,
+    problem_matrix STRING (2000) NOT NULL,
+    status STRING (100) NOT NULL
+);
+CREATE TABLE records (
+    id        INTEGER     PRIMARY KEY AUTOINCREMENT
+                          UNIQUE
+                          NOT NULL,
+    user_id   INTEGER     REFERENCES users (id) 
+                          NOT NULL,
+    matrix_id INTEGER     REFERENCES matrixes (id) 
+                          NOT NULL,
+    time      INTEGER     NOT NULL,
+    date      STRING (20) NOT NULL
+);
+CREATE TABLE users (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT
+                 UNIQUE
+                 NOT NULL,
+    name STRING  NOT NULL
+);
+
+"""
 
 
 def solve_sudoku(size, grid):
@@ -121,34 +154,89 @@ def deselect(x_set, y_set, r, cols):
 
 class MyDataBaseCursor:
     def __init__(self, db_path: str):
+        files = list(os.walk(os.getcwd()))[0][-1]
+        new_db = False
+        if db_path not in files:
+            with open(db_path, 'w', encoding='utf-8'):
+                pass
+            new_db = True
         self.connection = sqlite3.connect(db_path)
         self.cursor = self.connection.cursor()
+        if new_db:
+            self.cursor.executescript(CREATE_DATABASE_SCRIPT)
 
-    def insert_sudoku_into_db(self, sudoku) -> None:
+    def insert_sudoku_into_db(self, sudoku, status) -> None:
         problem_matrix = self._matrix_to_str(sudoku.get_problem_matrix())
         solved_matrix = self._matrix_to_str(sudoku.get_solved_matrix())
         sudoku_level = sudoku.get_difficult_level_name()
         timestamp = sudoku.get_timestamp()
         size = sudoku.get_size()
 
-        data = {'problem_matrix': problem_matrix,
-                'solved_matrix': solved_matrix,
-                'sudoku_level': sudoku_level,
+        data = {'problem_matrix': '\'' + problem_matrix + '\'',
+                'solved_matrix': '\'' + solved_matrix + '\'',
+                'level': '\'' + sudoku_level + '\'',
                 'timestamp': timestamp,
-                'size': size}
+                'size': size,
+                'status': '\'' + status + '\''}
 
-        self.cursor.execute(f"""INSERT INTO matrixes({', '.join([str(key) for key in data.keys()])})
-         VALUES ({', '.join([str(data[key]) for key in data.keys()])}""")
+        print(f"""INSERT INTO matrixes({', '.join([str(key) for key in
+                                                                 data.keys()])})
+        VALUES ({', '.join([str(data[key]) for key in data.keys()])})""")
+
+        self.cursor.execute(f"""INSERT INTO matrixes({', '.join([str(key) for key in
+                                                                 data.keys()])})
+        VALUES ({', '.join([str(data[key]) for key in data.keys()])})""")
+        self.connection.commit()
 
     def get_sudoku_from_db(self, **kwargs):
         # TODO
         pass
 
     def _matrix_to_str(self, matrix: list) -> str:
-        return str(matrix)
+        temp = []
+        for row in matrix:
+            temp += ['-'.join([str(x) for x in row])]
+        return '='.join(temp)
 
     def _str_to_matrix(self, s: str) -> list:
         return [row.strip()[1:-1].split(', ') for row in s.strip()[1:-1].split(', ')]
+
+    def get_data(self, **kwargs):
+        kwargs = list(kwargs)
+
+    def terminate(self):
+        self.connection.close()
+
+    def execute(self, *args, **kwargs):
+        return self.cursor.execute(*args, **kwargs)
+
+
+class MyThread(Thread):
+    def __init__(self, sudoku_level_name, log=None, name='unnamed_thread'):
+        super().__init__()
+        if log is None:
+            log = []
+        self.log = log
+        self.sudoku_level_name = sudoku_level_name
+        self.sudoku_level = LEVELS_SETTINGS[sudoku_level_name]
+        self.name = name
+
+    def run(self):
+        sudoku = Sudoku()
+        now = datetime.datetime.now()
+        sudoku.generate_sudoku(self.sudoku_level_name)
+        t = datetime.datetime.now() - now
+        temp = []
+        temp.append('=' * 100)
+        temp.append(' '.join(['Поток', self.name,
+                              self.sudoku_level_name,
+                              'завершил работу за',
+                              str(t.microseconds / 1000000), 'секунд']))
+        temp.append(sudoku)
+        self.log.append(temp)
+        print(temp)
+
+        MyDataBaseCursor(DB_NAME).insert_sudoku_into_db(sudoku, status='PRELOADED')
 
 
 class Sudoku:
@@ -283,7 +371,7 @@ class Sudoku:
 
             cells = self.size ** 4
 
-            difficult_max, difficult_min = LEVELS[difficult_level_name]
+            difficult_max, difficult_min = LEVELS_SETTINGS[difficult_level_name]
             difficult_max = cells - difficult_max
 
             variants = [(row, col, problem_sudoku[row][col]) for row in range(self.size ** 2)
@@ -296,7 +384,7 @@ class Sudoku:
             maximum_sudoku = None
 
             attempts = 0
-            max_attempts_count = 1000
+            max_attempts_count = ATTEMPTS_MAX_COUNT
 
             current_difficult = 0
             while current_difficult < difficult_max:
@@ -329,6 +417,7 @@ class Sudoku:
                     current_difficult = maximum_difficult
                     break
 
+            # TODO
             print('Max Target:', difficult_max, 'Max Founded:', maximum_difficult,
                   'Current:', current_difficult, 'Attempt', attempts)
 
@@ -356,6 +445,67 @@ class Sudoku:
     def get_size(self):
         """Возвращает размер самого маленького квадрата судоку"""
         return self.size
+
+
+class LeadersBoard(QWidget):
+    def __init__(self, parent_window):
+        super(LeadersBoard, self).__init__()
+        self.setupUi(self)
+        self.parent_window = parent_window
+
+    def setupUi(self, Form):
+        Form.setObjectName("Form")
+        Form.resize(549, 384)
+        self.verticalLayout = QtWidgets.QVBoxLayout(Form)
+        self.verticalLayout.setObjectName("verticalLayout")
+        self.horizontalLayout = QtWidgets.QHBoxLayout()
+        self.horizontalLayout.setObjectName("horizontalLayout")
+        self.replay = QtWidgets.QPushButton(Form)
+        self.replay.setObjectName("replay")
+        self.horizontalLayout.addWidget(self.replay)
+        self.show_same = QtWidgets.QPushButton(Form)
+        self.show_same.setObjectName("show_same")
+        self.horizontalLayout.addWidget(self.show_same)
+        self.selecter_difficult_level = QtWidgets.QComboBox(Form)
+        self.selecter_difficult_level.setObjectName("selecter_difficult_level")
+        self.selecter_difficult_level.addItem("")
+        self.selecter_difficult_level.addItem("")
+        self.selecter_difficult_level.addItem("")
+        self.selecter_difficult_level.addItem("")
+        self.horizontalLayout.addWidget(self.selecter_difficult_level)
+        self.verticalLayout.addLayout(self.horizontalLayout)
+        self.table = QtWidgets.QTableWidget(Form)
+        self.table.setObjectName("table")
+        self.table.setColumnCount(0)
+        self.table.setRowCount(0)
+        self.table.verticalHeader().setVisible(False)
+        self.verticalLayout.addWidget(self.table)
+
+        self.retranslateUi(Form)
+        QtCore.QMetaObject.connectSlotsByName(Form)
+
+    def retranslateUi(self, Form):
+        _translate = QtCore.QCoreApplication.translate
+        Form.setWindowTitle(_translate("Form", "Таблица лидеров"))
+        self.replay.setText(_translate("Form", "Повторить"))
+        self.show_same.setText(_translate("Form", "Смотреть результаты"))
+        self.selecter_difficult_level.setCurrentText(_translate("Form", "Сложность"))
+        self.selecter_difficult_level.setItemText(0, _translate("Form", "Сложность"))
+        self.selecter_difficult_level.setItemText(1, _translate("Form", "Легко 👶"))
+        self.selecter_difficult_level.setItemText(2, _translate("Form", "Средне 👦"))
+        self.selecter_difficult_level.setItemText(3, _translate("Form", "Сложно 🤓"))
+
+    def get_results(self):
+        level = self.selecter_difficult_level.currentText()
+        if level == 'Сложность':
+            level = '%%'
+
+
+
+        result = self.parent_window.database_cursor.get_data()
+
+    def fill_table(self):
+        results = self.get_results()
 
 
 class Ui_MainWindow(object):
@@ -389,14 +539,11 @@ class Ui_MainWindow(object):
         self.action_8.setObjectName("action_8")
         self.action_9 = QtWidgets.QAction(MainWindow)
         self.action_9.setObjectName("action_9")
-        self.action_10 = QtWidgets.QAction(MainWindow)
-        self.action_10.setObjectName("action_10")
         self.action_11 = QtWidgets.QAction(MainWindow)
         self.action_11.setObjectName("action_10")
         self.menu_2.addAction(self.action_7)
         self.menu_2.addAction(self.action_8)
         self.menu_2.addAction(self.action_9)
-        self.menu_2.addAction(self.action_10)
         self.menu.addAction(self.menu_2.menuAction())
         self.menu.addSeparator()
         self.menu.addAction(self.action_5)
@@ -421,7 +568,6 @@ class Ui_MainWindow(object):
         self.action_7.setText(_translate("MainWindow", "Легко 👶"))
         self.action_8.setText(_translate("MainWindow", "Средне 👦"))
         self.action_9.setText(_translate("MainWindow", "Сложно 🤓"))
-        self.action_10.setText(_translate("MainWindow", "Адски сложно 🎓"))
         self.action_11.setText(_translate("MainWindow", "Спрятать таймер"))
 
 
@@ -434,6 +580,7 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.game_state = EMPTY
 
         self.action_11.triggered.connect(self.show_hide_timer)
+        self.action_2.triggered.connect(self.show_records_table)
 
         self.database_cursor = None
         self.connect_db()
@@ -445,8 +592,10 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.is_show_timer = True
         self.showtime()
 
-        for i in range(7, 11):
-            getattr(self, 'action_%d' % i).triggered.connect(self.new_game_btn_clicked)
+        new_level_buttons = ['action_7', 'action_8', 'action_9', 'action_11']
+
+        for name in new_level_buttons:
+            getattr(self, name).triggered.connect(self.new_game_btn_clicked)
 
         self.main_layout = QtWidgets.QGridLayout(self.centralwidget)
         self.main_layout.setHorizontalSpacing(3)
@@ -477,6 +626,10 @@ class MainWindow(Ui_MainWindow, QMainWindow):
                 my_font.setPixelSize(20)
                 getattr(self, f'btn{i}{j}').setFont(my_font)
 
+        for key in LEVELS_SETTINGS:
+            thread = MyThread('HARD')
+            thread.start()
+
     def load_matrix(self, matrix=None):
         if matrix is None:
             matrix = self.sudoku.get_problem_matrix()
@@ -493,8 +646,7 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         levels = {
             "Легко 👶": 'EASY',
             "Средне 👦": 'STANDARD',
-            "Сложно 🤓": 'HARD',
-            "Адски сложно 🎓": 'HARDCORE'
+            "Сложно 🤓": 'HARD'
         }
         level = levels[btn.text()]
         print(level)
@@ -530,27 +682,32 @@ class MainWindow(Ui_MainWindow, QMainWindow):
             self.action_11.setText('Показать таймер')
 
     def connect_db(self):
-        try:
-            self.database_cursor = MyDataBaseCursor(DB_NAME)
-        except Exception as e:
-            print(e)
+        self.database_cursor = MyDataBaseCursor(DB_NAME)
 
     def closeEvent(self, a0: QtGui.QCloseEvent) -> None:
         self.check_save()
+        self.database_cursor.terminate()
 
     def check_save(self):
         if self.game_state != EMPTY:
-            mb = QtWidgets.QMessageBox
-            answer = mb.question(self, '',
-                                 'Сохранить текущую игру?',
-                                 mb.No | mb.Yes)
-
-            if answer == mb.Yes:
+            self.game_state = PAUSE
+            message_box = QtWidgets.QMessageBox
+            answer = message_box.question(self, '',
+                                          'Сохранить текущую игру?',
+                                          message_box.No | message_box.Yes)
+            if answer == message_box.Yes:
                 self.save_game()
-            elif answer == mb.No:
-                return False
-            elif answer == 65536:
-                return None
+
+    def generate_new_sudokus(self, level):
+        if level is str:
+            MyThread(level).start()
+        elif level is list:
+            for key in level:
+                MyThread(key).start()
+
+    def show_records_table(self):
+        self.new_window = LeadersBoard(self)
+        self.new_window.show()
 
 
 if __name__ == '__main__':
@@ -558,26 +715,3 @@ if __name__ == '__main__':
     ex = MainWindow()
     ex.show()
     sys.exit(app.exec())
-
-
-class MyThread(Thread):
-    def __init__(self, sudoku_level_name, log, name):
-        super().__init__()
-        self.log = log
-        self.sudoku_level_name = sudoku_level_name
-        self.sudoku_level = LEVELS[sudoku_level_name]
-        self.name = name
-
-    def run(self):
-        sudoku = Sudoku()
-        now = datetime.datetime.now()
-        sudoku.generate_sudoku(self.sudoku_level_name)
-        t = datetime.datetime.now() - now
-        temp = []
-        temp.append('=' * 100)
-        temp.append(' '.join(['Поток', self.name,
-                              self.sudoku_level_name,
-                              'завершил работу за', str(t.microseconds / 1000000), 'секунд']))
-        temp.append(sudoku)
-        self.log.append(temp)
-        print(temp)
